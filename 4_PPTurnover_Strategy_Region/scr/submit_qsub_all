@@ -1,0 +1,17 @@
+#!/bin/bash
+#PBS -q normal
+#PBS -N Age_Test
+#PBS -l nodes=1:ppn=1
+#PBS -o test.out
+#PBS -e test.err
+#PBS -l walltime=1200:00:00
+
+source /public/home/yanxizhe/anaconda3/etc/profile.d/conda.sh
+conda activate CCUS_layout
+
+date
+cd $PBS_O_WORKDIR
+python S2_RunAll.py >$PBS_O_WORKDIR/log
+
+date
+printf "Finish"
