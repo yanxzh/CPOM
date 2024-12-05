@@ -1,4 +1,4 @@
-# CPOM
+![image](https://github.com/user-attachments/assets/265d52dd-0749-4a85-8d5b-3692c04a69c9)# CPOM
 This folder contains the project code for CCUS-layout-resolved Pathway Optimization Model (CPOM), including:
 
 0_SetAndRun: basic setting for the modelling
@@ -14,3 +14,4 @@ This folder contains the project code for CCUS-layout-resolved Pathway Optimizat
 We provide full access to all the code used in generating the results for the study "CCUS layout reshapes energy infrastructure transition for global key industries." However, some of the data utilized in the CPOM model is not publicly available, as it depends on technical attributes and emission data obtained from GID, which is based on proprietary databases from collaborators. These databases, including WEPP, MCI, and Global Cement, are subject to user license agreements that restrict public access.
 
 If you are looking for more details, please contact yanxz22@mails.tsinghua.edu.cn or dantong@tsinghua.edu.cn.
+![Uploading image.png…]()
