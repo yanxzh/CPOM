@@ -16,6 +16,6 @@ We provide full access to all the code used in generating the results for the st
 If you are looking for more details, please contact yanxz22@mails.tsinghua.edu.cn or dantong@tsinghua.edu.cn.
 
 The roadmap of candidate CCUS network (3_CandidateNetwork) and pathway simulation (4_PPTurnover_Strategy_Region) are shown in the following figures:
-![image](https://github.com/user-attachments/assets/265d52dd-0749-4a85-8d5b-3692c04a69c9)
+![image](https://github.com/user-attachments/assets/a1b12c03-7afc-408f-ad47-6f4f0c15aa18)
 ![image](https://github.com/user-attachments/assets/b6b2c5e4-f462-4f48-9e43-a38ed46d4ab6)
 
