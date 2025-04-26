@@ -10,7 +10,7 @@ import geopandas as gpd
 import networkx as nx
 import pandas as pd
 import numpy as np
-from shapely.geometry import Point, LineString
+from shapely.geometry import Point, LineString, GeometryCollection
 from shapely.ops import nearest_points
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -26,6 +26,8 @@ from shapely.geometry import MultiLineString
 import random
 from S0_GlobalENV import *
 from shapely.geometry import shape, mapping
+from S7_ExcludeMask import ExcludeMask_Main
+from S8_WaterConstraints import WaterConstraints_Main
 
 #%%
 def mkdir(path):
@@ -65,7 +67,7 @@ def get_temp(df,df_iso,co):
     return df,df_iso
 
 def clear_point(rn):
-    print('Creat Point SHP')
+    print('Creat Point SHP',flush=True)
     
     sink = gpd.read_file('../../Regional_Input/Region_Sink/Potential_sink_'+reg+'.shp',crs='EPSG:4326')
     sink.insert(column='Capacity',loc=sink.shape[1],value=np.nan)
@@ -87,14 +89,12 @@ def clear_point(rn):
     source.loc[:,['Longitude','Latitude','CO2','Capacity']] = \
         source.loc[:,['Longitude','Latitude','CO2','Capacity']].astype(float)
     
-    #源的产能需要重新制定，直接打上tag
     source['Capacity'] = -9
     
     source = source.reset_index(drop=True).reset_index(drop=False)
     source.rename(columns={'Plant ID':'ID'},inplace=True)
     source = gpd.GeoDataFrame(source, geometry=gpd.points_from_xy(source['Longitude'], source['Latitude']),crs='EPSG:4326')
     
-    # 重新设置索引为整数索引
     sink = sink.reset_index(drop=True).reset_index(drop=False)
     sink['ID'] = 'Si_'+sink['index'].astype(str)
 
@@ -109,15 +109,19 @@ def clear_point(rn):
     all_data = all_data.reset_index(drop=True)
     all_data = gpd.GeoDataFrame(all_data, geometry=all_data['geometry'],crs='EPSG:4326')
     
+    all_data = ExcludeMask_Main(sourcesink=all_data.copy(deep=True))
+    all_data = WaterConstraints_Main(sourcesink=all_data.copy(deep=True))
+
     all_data.to_file('../output/1_IsolatePoint/0_point_'+reg+'.shp', driver='ESRI Shapefile',encoding='utf-8')
     
     return
 
 def point_connect(po,net,core,nanf,big,end):
-    print(core)
+    print(core,flush=True)
     po = po.loc[big:end,:]
-    df = pd.DataFrame()
-    iso_point = pd.DataFrame()
+    
+    line_list = []
+    iso_list = []
     
     for idx, point in po.iterrows():
         # print(idx)
@@ -131,31 +135,37 @@ def point_connect(po,net,core,nanf,big,end):
 
         if distance_km <= 100:
             extended_line = LineString([nearest_point, point.geometry])
+
             direction_vector = Point(point.geometry.x - nearest_point.x, point.geometry.y - nearest_point.y)
+
             dx, dy = direction_vector.xy
             nearest_point2 = Point(nearest_point.x - 0.001 * dx[0], nearest_point.y -0.001 * dy[0])
             extended_line2 = LineString([nearest_point2, point.geometry])
     
-            df = pd.concat([df, nanf], axis=0, ignore_index=True)
-            df.loc[df.shape[0] - 1, 'geometry'] = extended_line2
+            new_line = nanf.copy()
+            new_line.loc[:, 'geometry'] = extended_line2
+            line_list.append(new_line)
             
         else:
-            iso_point = pd.concat([iso_point,pd.DataFrame(point).T],axis=0)
+            iso_list.append(point)
     
+    df = pd.concat(line_list, ignore_index=True)
+    iso_point = pd.DataFrame(iso_list,columns=['geometry'])
+
     df.to_pickle('../temp/'+str(core)+'.pkl')
     iso_point.to_pickle('../temp/iso_'+str(core)+'.pkl')
     
     return
     
 def point_connect_main(po,net):
-    print('Connect')
+    print('Connect',flush=True)
     nanf = pd.DataFrame(np.repeat([None],net.shape[1],axis=0)).T
     nanf.columns = net.columns
     net = net.reset_index(drop=True)
     
     # point_connect(po,net,0,nanf,0,int(po.shape[0]/56))
     
-    core_num = 28
+    core_num = 10
     for icore in range(core_num):
         exec('p'+str(icore)+'=Process(target=point_connect,\
               args=(po,net,icore,nanf,'\
@@ -217,7 +227,7 @@ def network_all():
     while df_all2.shape[0] > 0:
         
         a = np.min(df_all2.index)
-        print(a)
+        print(a,flush=True)
         
         geo_this = df_all2.loc[a, 'geometry']
         intersect = df_all2.intersects(geo_this)
@@ -272,68 +282,40 @@ def network_all():
     a = a.reset_index(drop=True)
     
     return a
-    
+
+def clean_and_merge_lines(road_network: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    unioned = unary_union(road_network.geometry.values)
+    merged = linemerge(unioned)
+
+    lines = []
+
+    def unpack(geom):
+        if isinstance(geom, LineString):
+            lines.append(geom)
+        elif isinstance(geom, MultiLineString):
+            lines.extend(geom.geoms)
+        elif isinstance(geom, GeometryCollection):
+            for g in geom.geoms:
+                unpack(g)
+
+    unpack(merged)
+
+    return gpd.GeoDataFrame(geometry=lines, crs='EPSG:4326')
+
 #%%
 if __name__ == '__main__':
     mkdir('../output/1_IsolatePoint/')
     
     road_network = network_all()
-    
     clear_point(rn=road_network)
-    
+
     isolated_points = gpd.read_file('../output/1_IsolatePoint/0_point_'+reg+'.shp',crs='EPSG:4326')
-    
     isolated_points = isolated_points.to_crs('EPSG:4326')
     road_network = road_network.to_crs('EPSG:4326')
-    
     point_connect_main(po=isolated_points,net=road_network)
         
     road_network = gpd.read_file('../output/1_IsolatePoint/1_net_'+reg+'.shp',crs='EPSG:4326')
+    processed_gdf = clean_and_merge_lines(road_network)
     
-    road_network = road_network.explode()
-            
-    multilines = MultiLineString(road_network.geometry.values)
-    
-    merged_lines = linemerge(multilines)
-    
-    if not merged_lines.is_simple:
-        merged_lines = unary_union(merged_lines)
-    processed_gdf = gpd.GeoDataFrame(geometry=[merged_lines],crs='EPSG:4326')
-    
-    fig, ax = plt.subplots(figsize=(50, 40)); 
-    processed_gdf.plot(ax=ax,edgecolor='#53868B',linewidth=3)
-    
-    road_network = gpd.read_file('../../Regional_Input/Region_Road/PrimaryRoad_'+reg+'.shp',crs='EPSG:4326')
-    road_network.plot(ax=ax,color='Red')
-    
-    isolated_points.loc[isolated_points['Type']=='Sink',:].plot(
-        ax=ax,
-        facecolor='#68228B',
-        edgecolor='#68228B',
-        marker='*',
-        markersize=150,
-        linewidth=0.5)
-    
-    isolated_points.loc[isolated_points['Type']=='Source',:].plot(
-        ax=ax,
-        facecolor='blue',
-        edgecolor='blue',
-        marker='o',
-        markersize=150,
-        linewidth=0.5)
-    
-    # ax.set_ylim([15,55]);
-    # ax.set_xlim([73,135]);
-  
-    ax.set_xticks([])
-    ax.set_yticks([])
-    
-    bwith = 2 #边框宽度设置为1
-    ax.spines['bottom'].set_linewidth(bwith);
-    ax.spines['left'].set_linewidth(bwith);
-    ax.spines['top'].set_linewidth(bwith);
-    ax.spines['right'].set_linewidth(bwith);
-    
-    plt.savefig('../figure/SinkAndPipeline_'+reg+'.jpg',dpi=100,bbox_inches='tight',format='jpg')
     processed_gdf.to_file('../output/1_IsolatePoint/2_NetWithlineAndPoint_'+reg+'.shp', driver='ESRI Shapefile',encoding='utf-8')
     isolated_points.to_file('../output/1_IsolatePoint/3_SelectedPoint_'+reg+'.shp', driver='ESRI Shapefile',encoding='utf-8')
