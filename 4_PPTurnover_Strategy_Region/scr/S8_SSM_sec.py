@@ -29,16 +29,11 @@ def get_source(SSM_dir,ireg,yr_beg,yr_end):
     df = pd.read_csv(SSM_dir+'/capture_'+ireg+'_'+str(yr_beg)+'_'+str(yr_end)+'.csv')
     df = df.loc[df['CO2 Capature (Mt)']>0,:].reset_index(drop=True)
     df.drop(columns=['CO2 Capature (Mt)','Capature Marker','Capature Cost (USD)'],inplace=True)
-    
-    #################
     constrain = df['Commitment (Mt)'].sum()*0.9
-    #################
     
     return df,constrain
 
-#
 def get_edge(so_data,si_data,SSM_dir,ireg,yr_beg,yr_end):
-    print('edge_in', flush=True)
     all_dis2 = pd.read_csv(SSM_dir+'/transport_'+ireg+'_'+str(yr_beg)+'_'+str(yr_end)+'.csv',
                            usecols=['Start', 'Lon_st', 'Lat_st', 'End',
                                     'Lon_en', 'Lat_en', 'Distance','CO2 Transport (Mt)'])
@@ -58,12 +53,8 @@ def SSM_drive(so_data,si_data,
               ireg,yr_beg,yr_end,
               constrain,SSM_dir):
     
-    a = time.time()
-    
-    # Create a Gurobi model
     m = Model()
     
-    ####################################marker##########################
     if yr_beg == startyr:
         r_par = pd.DataFrame(data=1,index=so_data.index,columns=['CCUSInstall'])
         
@@ -107,11 +98,9 @@ def SSM_drive(so_data,si_data,
         i_par.loc[np.isin(si_data['Plant ID'],filtered_id),'StorageConstruct'] = 0
         
         del edge_distance_all,r_par_all,i_par_all
-        
-    ####################################
+
     cos_ret = pd.read_csv('../../2_GetPPHarmonized/output/PlantCaptureCost.csv')
     cos_ret = pd.merge(so_data.loc[:,['Plant ID','Sector','Facility Type']],cos_ret,on='Plant ID',how='left')
-    # cos_ret = cos_ret['CaptureCost']
     
     cost_dict = pd.read_excel('../../2_GetPPHarmonized/input/Dict_cost/Dict_RetrofitCost.xlsx',sheet_name='Final')
     pha_dict = pd.read_excel('../input/dict/DictOfPhaseout.xlsx',sheet_name='Max_Load_Life')
@@ -119,7 +108,7 @@ def SSM_drive(so_data,si_data,
     for isec in pp_run:
         for ifa in fa_dict.loc[fa_dict['Sector']==isec,'Facility Type']:
             unit_cap = pha_dict.loc[pha_dict['Sector']==isec,'Newbuilt_Capacity'].values[0]
-            
+
             if isec == 'Power':
                 unit_cost = cost_dict.loc[cost_dict['Facility Type']==ifa,'UnitCaptureCost'].values[0]
                 cos_ret.loc[(pd.isnull(cos_ret['CaptureCost']))&(cos_ret['Facility Type']==ifa),'CaptureCost'] = unit_cap/8760*2*unit_cost
@@ -133,26 +122,38 @@ def SSM_drive(so_data,si_data,
     cos_ret = cos_ret['CaptureCost']
     
     del cost_dict,unit_cost,pha_dict
-    
+
     s_var = m.addVars(so_data.shape[0], vtype=GRB.BINARY, name='s_var')
 
-    changing_rate = pd.read_excel('../input/dict/Dict_Capture.xlsx',sheet_name='ComitPrediction',usecols=['Year','Comitted capture (Mt)'])
-    changing_rate_power = (changing_rate.loc[changing_rate['Year']==yr_end,'Comitted capture (Mt)'].values/changing_rate.loc[changing_rate['Year']==2021,'Comitted capture (Mt)'].values)[0]**np.log2((1-0.089))
-    changing_rate_other = (changing_rate.loc[changing_rate['Year']==yr_end,'Comitted capture (Mt)'].values/changing_rate.loc[changing_rate['Year']==2021,'Comitted capture (Mt)'].values)[0]**np.log2((1-0.05))
-    
-    cos_ret[so_data['Sector']=='Power'] = cos_ret[so_data['Sector']=='Power']*changing_rate_power
-    cos_ret[so_data['Sector']!='Power'] = cos_ret[so_data['Sector']!='Power']*changing_rate_other
-    
     Potential_rot = (cos_ret*r_par['CCUSInstall'].values)
     
-    del changing_rate_power,changing_rate_other
-    
-    changing_rate_cap = (changing_rate.loc[changing_rate['Year']==yr_end,'Comitted capture (Mt)'].values/changing_rate.loc[changing_rate['Year']==2021,'Comitted capture (Mt)'].values)[0]**np.log2((1-0.125))
-    cos_cap2 = cos_cap*changing_rate_cap
+    cos_cap2 = cos_cap
     Potential_cap = cos_cap2*so_data['Commitment (Mt)'].values*0.9#(cos_cap-ben_cp)
-    
-    del changing_rate_cap
-    
+
+    pool_data = so_data.loc[:,['Pool_ID','WaterResou','WaterOrigi']].drop_duplicates()
+    for ipool in pool_data['Pool_ID']:
+        wr = pool_data.loc[pool_data['Pool_ID']==ipool,'WaterResou'].values[0]
+        wod = pool_data.loc[pool_data['Pool_ID']==ipool,'WaterOrigi'].values[0]
+
+        if wod/wr<=0.8:
+            constr_expr = quicksum(
+                s_var[i] * waterconsum * so_data.loc[i, 'CO2 Emissions'] * 0.9/10**6#年耗水量统一为 10^6 m3
+                for i in range(so_data.shape[0])
+                if so_data.loc[i, 'Pool_ID'] == ipool
+            )
+
+            m.addConstr((constr_expr + wod) / wr <= 0.8, name=f'WaterLimit_{ipool}')
+        else:
+            constr_expr = quicksum(
+                s_var[i]
+                for i in range(so_data.shape[0])
+                if so_data.loc[i, 'Pool_ID'] == ipool
+            )
+
+            m.addConstr(constr_expr == 0, name=f'WaterLimit_{ipool}')
+
+    del pool_data,wr,wod,constr_expr
+
     filter1 = np.isin(so_data['Plant ID'],all_loc['Plant ID'])
     m.addConstr(sum(s_var.select(np.where(~filter1)[0]))==0,name='So_Zero')
     del filter1
@@ -160,36 +161,34 @@ def SSM_drive(so_data,si_data,
     #%%
     i_var = m.addVars(si_data.shape[0], vtype=GRB.BINARY, name='i_var')
     d_var = m.addVars(si_data.shape[0], lb=0, name='d_var')
-    
+
     eor_par = pd.DataFrame(data=0,index=si_data.index,columns=['EOR'])
     eor_par.loc[(si_data['DSA']==0).values,'EOR'] = 1
     
-    changing_rate_storage = (changing_rate.loc[changing_rate['Year']==yr_end,'Comitted capture (Mt)'].values/changing_rate.loc[changing_rate['Year']==2021,'Comitted capture (Mt)'].values)[0]**np.log2((1-0.0715))
-    cos_site2 = cos_site*changing_rate_storage
-    
+    cos_site2 = cos_site
+
     Potential_site = cos_site2*i_par['StorageConstruct'].values
     oil_changing = pd.read_excel('../input/dict/Dict_OilPrice.xlsx',usecols=['Year','Oil price'])
     oil_changing = (oil_changing.loc[oil_changing['Year']==yr_end,'Oil price'].values/oil_changing.loc[oil_changing['Year']==2020,'Oil price'].values)[0]
     
-    cos_stor2 = cos_stor*changing_rate_storage
+    cos_stor2 = cos_stor
     ben_eor2 = ben_eor*oil_changing
     Potential_sto = cos_stor2-ben_eor2*eor_par['EOR'].values
     
-    del oil_changing,changing_rate_storage
-    
+    del oil_changing
+
     filter1 = np.isin(si_data['Plant ID'],all_loc['Plant ID'])
     m.addConstr(sum(i_var.select(np.where(~filter1)[0]))==0,name='Si_Zero')
     del filter1
-    
+
+    #%%
     b_var1 = m.addVars(edge_distance.shape[0], vtype=GRB.BINARY, name='b_var1')
     b_var2 = m.addVars(edge_distance.shape[0], vtype=GRB.BINARY, name='b_var2')
     b_var3 = m.addVars(edge_distance.shape[0], vtype=GRB.BINARY, name='b_var3')
     b_var4 = m.addVars(edge_distance.shape[0], vtype=GRB.BINARY, name='b_var4')
 
-    changing_rate_trans = (changing_rate.loc[changing_rate['Year']==yr_end,'Comitted capture (Mt)'].values/changing_rate.loc[changing_rate['Year']==2021,'Comitted capture (Mt)'].values)[0]**np.log2((1-0.05))
-    
-    cos_pipe2 = [changing_rate_trans*i for i in cos_pipe]
-    cos_tran2 = [changing_rate_trans*i for i in cos_tran]
+    cos_pipe2 = cos_pipe
+    cos_tran2 = cos_tran
     
     Potential_pip1 = cos_pipe2[0]*edge_distance['PiplineInstall1'].values
     Potential_tran1 = cos_tran2[0]*edge_distance['Distance'].values
@@ -200,8 +199,6 @@ def SSM_drive(so_data,si_data,
     Potential_pip4 = cos_pipe2[3]*edge_distance['PiplineInstall4'].values*edge_distance['Distance'].values
     Potential_tran4 = cos_tran2[3]*edge_distance['Distance'].values
     
-    del changing_rate_trans
-    
     #%%
     t_var = m.addVars(edge_distance.shape[0], lb=0, name='t_var')
     t_para= edge_distance.loc[:,['Start','End']].copy(deep=True)
@@ -211,12 +208,13 @@ def SSM_drive(so_data,si_data,
         
         t_para2 = t_para.copy(deep=True)
         t_para2 = t_para2.reindex(columns=['Start','End',all_loc.loc[i,'Plant ID']],fill_value=np.nan)
-        
+
         filter1 = (t_para2['Start']!=all_loc.loc[i,'Plant ID'])&(t_para2['End']!=all_loc.loc[i,'Plant ID'])
         t_para2.loc[filter1,all_loc.loc[i,'Plant ID']] = 0
-        
+
         filter2 = (t_para2['Start']!=all_loc.loc[i,'Plant ID'])&(t_para2['End']==all_loc.loc[i,'Plant ID'])
         t_para2.loc[filter2,all_loc.loc[i,'Plant ID']] = 1
+
         filter3 = (t_para2['Start']==all_loc.loc[i,'Plant ID'])&(t_para2['End']!=all_loc.loc[i,'Plant ID'])
         t_para2.loc[filter3,all_loc.loc[i,'Plant ID']] = -1
         
@@ -241,9 +239,9 @@ def SSM_drive(so_data,si_data,
     
     del filter1,filter2,filter3,loc,t_para2,t_para
     
-    
     #%%
     m.addConstr((so_data['Commitment (Mt)'].values*0.9).T@list(s_var.values())>=constrain,name='E')
+
     for i in range(si_data.shape[0]):
         m.addConstr(d_var[i]<=i_var[i]*si_data.loc[i,'CO2'],name='I'+str(i))
                 
@@ -259,7 +257,7 @@ def SSM_drive(so_data,si_data,
     m.addConstrs((t_var1[i]+t_var2[i]+t_var3[i]+t_var4[i]==t_var[i] for i in range(edge_distance.shape[0])),name='P5')
 
     m.addConstrs((b_var1[i]+b_var2[i]+b_var3[i]+b_var4[i]<=1 for i in range(edge_distance.shape[0])),name='P6')
-    
+
     iloc_ls = []
     for i in range(edge_distance.shape[0]):
         if i in iloc_ls:
@@ -307,7 +305,6 @@ def SSM_drive(so_data,si_data,
             del filter1,iloc
         except:
             pass
-        
     
     #%%
     m.setParam('MIPGap',1*10**(-6))
@@ -329,16 +326,14 @@ def SSM_drive(so_data,si_data,
                      Potential_pip1/10**8 @ list(b_var1.values())+Potential_pip2/10**8 @ list(b_var2.values())+\
                      Potential_pip3/10**8 @ list(b_var3.values())+Potential_pip4/10**8 @ list(b_var4.values())),sense=GRB.MINIMIZE)
     m.optimize()
-
-    b = time.time()
-
+    
     cap_data = so_data.copy(deep=True)
     cap_data.insert(loc=cap_data.shape[1],value=m.getAttr('x', s_var).select('*', '*'),column='Capature Marker')
-    # cap_data.insert(loc=cap_data.shape[1],value=yr_end,column='Year')
     cap_data['CO2 Capature (Mt)'] = cap_data['Capature Marker']*cap_data['Commitment (Mt)']*0.9
     cap_data['Capature Cost (USD)'] = (Potential_rot+Potential_cap) * cap_data['Capature Marker']
+    print('捕获成本：'+str(cap_data['Capature Cost (USD)'].sum()/cap_data['CO2 Capature (Mt)'].sum()/10**6))
     cap_data.to_csv(SSM_dir+'/capture_sec_'+ireg+'_'+str(yr_beg)+'_'+str(yr_end)+'.csv',index=None)
-        
+
     pipe_data = edge_distance.copy(deep=True)
     pipe_data.insert(loc=pipe_data.shape[1],value=m.getAttr('x', b_var1).select('*', '*'),column='Pipeline1 Marker')
     pipe_data.insert(loc=pipe_data.shape[1],value=m.getAttr('x', b_var2).select('*', '*'),column='Pipeline2 Marker')
@@ -366,7 +361,6 @@ def SSM_drive(so_data,si_data,
     sto_data.insert(loc=sto_data.shape[1],value=yr_end,column='Year')
     sto_data['Storage Cost (USD)'] = Potential_sto*sto_data['CO2 Storage (Mt)']\
         +Potential_site*sto_data['Storage Marker']
-    print('储存成本：'+str(sto_data['Storage Cost (USD)'].sum()/sto_data['CO2 Storage (Mt)'].sum()/10**6))
     sto_data.to_csv(SSM_dir+'/store_sec_'+ireg+'_'+str(yr_beg)+'_'+str(yr_end)+'.csv',index=None)
     
     if yr_beg == startyr:
@@ -374,11 +368,6 @@ def SSM_drive(so_data,si_data,
         edge_distance['PiplineInstall2'] = pipe_data['Pipeline2 Marker'].replace({0:1,1:0})
         edge_distance['PiplineInstall3'] = pipe_data['Pipeline3 Marker'].replace({0:1,1:0})
         edge_distance['PiplineInstall4'] = pipe_data['Pipeline4 Marker'].replace({0:1,1:0})
-        
-        # edge_distance['CO2 Transport1 (Mt)'] = pipe_data['CO2 Transport1 (Mt)']
-        # edge_distance['CO2 Transport2 (Mt)'] = pipe_data['CO2 Transport2 (Mt)']
-        # edge_distance['CO2 Transport3 (Mt)'] = pipe_data['CO2 Transport3 (Mt)']
-        # edge_distance['CO2 Transport4 (Mt)'] = pipe_data['CO2 Transport4 (Mt)']
         
         edge_distance['Year'] = yr_end
         edge_distance.to_csv(SSM_dir+'/transport_sec_'+ireg+'_marker.csv',index=None)
@@ -402,11 +391,6 @@ def SSM_drive(so_data,si_data,
         edge_distance['PiplineInstall2'] = pipe_data['Pipeline2 Marker'].replace({0:1,1:0})
         edge_distance['PiplineInstall3'] = pipe_data['Pipeline3 Marker'].replace({0:1,1:0})
         edge_distance['PiplineInstall4'] = pipe_data['Pipeline4 Marker'].replace({0:1,1:0})
-
-        # edge_distance['CO2 Transport1 (Mt)'] = pipe_data['CO2 Transport1 (Mt)']
-        # edge_distance['CO2 Transport2 (Mt)'] = pipe_data['CO2 Transport2 (Mt)']
-        # edge_distance['CO2 Transport3 (Mt)'] = pipe_data['CO2 Transport3 (Mt)']
-        # edge_distance['CO2 Transport4 (Mt)'] = pipe_data['CO2 Transport4 (Mt)']
                 
         edge_distance['Year'] = yr_end
         
@@ -439,7 +423,6 @@ def SSM_drive(so_data,si_data,
     return
 
 #%%
-#源汇匹配总驱动
 def SSM_sec_main(ieng_sc,iend_sc,ior_sc,ireg,NewFuelEmis_dir,SSM_dir,yr_beg,yr_end):
     si_data = get_sink(ireg=ireg,SSM_dir=SSM_dir,yr_beg=yr_beg,yr_end=yr_end)
     so_data,constrain = get_source(SSM_dir=SSM_dir,

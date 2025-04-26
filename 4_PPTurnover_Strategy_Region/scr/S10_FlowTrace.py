@@ -21,6 +21,7 @@ from S1_Global_ENV import *
 
 #%%
 def tracking_source(cap_data,pipe_data,sto_data):
+
     flow_data = pd.DataFrame()
     loop_mr = 0
     
@@ -41,12 +42,13 @@ def tracking_source(cap_data,pipe_data,sto_data):
             for i in range(flow_data.shape[0]):
                 if i == 31:
                     pass
+
                 flow_mix = pipe_data.loc[pipe_data['Start']==flow_data.loc[i,'Layer'+str(loop_mr+1)],['Start','End']+['CO2 Transport (Mt)']]
                 flow_mix = flow_mix.reset_index(drop=True)
             
                 if flow_mix.shape[0]==0:
                     continue
-                
+
                 sto_this = pd.DataFrame(columns=['Start','CO2 Transport (Mt)'])
                 for ifl in range(flow_mix.shape[0]):
                     sto_nodes = sto_data.loc[sto_data['Plant ID']==flow_mix.loc[ifl,'Start'],['Plant ID','CO2']]
@@ -61,8 +63,9 @@ def tracking_source(cap_data,pipe_data,sto_data):
                 flow_mix.columns = ['Layer'+str(loop_mr+1),'Layer'+str(loop_mr+2),'CO2 Transport (Mt)']
                 
                 flow_mix['Mix'] = flow_mix['CO2 Transport (Mt)']/flow_mix['CO2 Transport (Mt)'].sum()
-                single_in = flow_data.loc[[i],:]
                 
+                single_in = flow_data.loc[[i],:]
+
                 cap_nodes = cap_data.loc[cap_data['Plant ID']==flow_data.loc[i,'Layer'+str(loop_mr+1)],['Plant ID','CO2 Capature (Mt)']]
                 if (cap_nodes.shape[0]>0) and (np.isin(cap_nodes['Plant ID'].values,cap_ls)==0):
                     cap_ls.append(cap_nodes['Plant ID'].values[0])
@@ -111,6 +114,7 @@ def FlowTrace_main(ieng_sc,iend_sc,ior_sc,ireg,
                   SSM_dir,NetworkStatus_dir,
                   yr_beg,yr_end):
     
+
     cap_data = pd.read_csv(SSM_dir+'/capture_sec_'+ireg+'_'+str(yr_beg)+'_'+str(yr_end)+'.csv')
     pipe_data = pd.read_csv(SSM_dir+'/transport_sec_'+ireg+'_'+str(yr_beg)+'_'+str(yr_end)+'.csv')
     sto_data = pd.read_csv(SSM_dir+'/store_sec_'+ireg+'_'+str(yr_beg)+'_'+str(yr_end)+'.csv')
@@ -119,7 +123,9 @@ def FlowTrace_main(ieng_sc,iend_sc,ior_sc,ireg,
     pipe_data = pipe_data.loc[(pipe_data['Year']==yr_end)&(pipe_data['CO2 Transport (Mt)']>0),:].reset_index(drop=True)
     sto_data = sto_data.loc[(sto_data['Year']==yr_end)&(sto_data['CO2 Storage (Mt)']>0),:].reset_index(drop=True)
 
+
     flow_all,layerNum = tracking_source(cap_data=cap_data,pipe_data=pipe_data,sto_data=sto_data)
+
     flow_all = final_deal(df=flow_all,num=layerNum)
     flow_all = final_deal(df=flow_all,num=layerNum)
     flow_all.to_csv(NetworkStatus_dir+'/4_CostAndFlow/3_AllFlowData_'+ireg+'_'+str(yr_beg)+'_'+str(yr_end)+'.csv',index=None)

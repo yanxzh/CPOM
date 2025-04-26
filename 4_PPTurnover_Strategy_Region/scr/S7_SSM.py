@@ -45,8 +45,8 @@ def get_sink(ireg,yr_beg,yr_end,SSM_dir):
     reg1 = ireg
             
     so_si = gpd.read_file('../../4_SSM/PreNet/PreNet_'+reg2+'/output/1_IsolatePoint/3_SelectedPoint_'+reg1+'.shp')
-    so_si.loc[:,['Longitude','Latitude','CO2','Capacity','DSA']] = \
-        so_si.loc[:,['Longitude','Latitude','CO2','Capacity','DSA']].astype(float)
+    so_si.loc[:,['Longitude','Latitude','CO2','Capacity','DSA','WaterResou','WaterOrigi']] = \
+        so_si.loc[:,['Longitude','Latitude','CO2','Capacity','DSA','WaterResou','WaterOrigi']].astype(float)
         
     so_si = so_si.rename(columns={'ID':'Plant ID'})
     
@@ -75,7 +75,7 @@ def get_source(ieng_sc,ior_sc,
     
     df = pd.DataFrame()
     constrain = 0
-    
+
     for isec in pp_run:
         for ifa in fa_dict.loc[fa_dict['Sector']==isec,'Facility Type']:
             df_ = pd.read_csv(NewFuelEmis_dir+isec+'_'+ifa+'_'+ireg+'_AllPP_'+str(yr_beg)+'_'+str(yr_end)+'.csv',encoding='utf-8-sig')
@@ -83,7 +83,11 @@ def get_source(ieng_sc,ior_sc,
                    'Sector','Facility Type', 'Longitude', 'Latitude',
                    'Start Year','Age','Capacity','Capacity Unit','CO2 Eta (%)']
             df_ = df_.loc[(df_['Year']==yr_end),col].reset_index(drop=True)
-            # df_ = df_.iloc[:100,:]
+
+            df_ = pd.merge(df_,
+                so_si.loc[:,['Plant ID','Pool_ID','WaterResou','WaterOrigi']].rename(columns={'Plant ID':'Fake_Plant ID'}),
+                on='Fake_Plant ID',how='left')
+            df_ = df_.loc[df_['Fake_Plant ID'].isin(so_si['Plant ID']),:].reset_index(drop=True)
     
             df_.rename(columns={'Fake_Plant ID':'Plant ID','Plant ID':'Location_Plant ID'},inplace=True)
             
@@ -93,29 +97,26 @@ def get_source(ieng_sc,ior_sc,
             
             df_['Age'] = yr_end-df_['Start Year'].astype(float)
             
-            df_['Commitment (Mt)'] = df_['CO2 Emissions']/((100-df_['CO2 Eta (%)'])/100)*(max_life-df_['Age'])/10**6
+
+            df_['Commitment (Mt)'] = df_['CO2 Emissions']/((100-df_['CO2 Eta (%)'])/100)*(max_life+extend_life-df_['Age'])/10**6
             
             df_ = df_.loc[df_['Commitment (Mt)']>0,:].reset_index(drop=True)
-            # df_.drop(['CO2 Eta (%)'],axis=1,inplace=True)
-            
+
             constrain = constrain + get_constrain(ieng_sc=ieng_sc,isec=isec,ifa=ifa,ireg=ireg,yr_end=yr_end,comit=df_['Commitment (Mt)'].sum())
             
             df_ = df_.loc[(np.isin(df_['Location_Plant ID'],so_si['Plant ID'])),:].reset_index(drop=True)
 
             df = pd.concat([df,df_],axis=0)
-
+    
     pha_order = pd.DataFrame()
     for isec in pp_run:
         for ifa in fa_dict.loc[fa_dict['Sector']==isec,'Facility Type']:
             if yr_beg == startyr:
                 pha_order_ = pd.read_csv('../../2_GetPPHarmonized/output/3_AgeRank/'+isec+'_'+ifa+'.csv')
                 pha_order_ = pha_order_.loc[:,['Plant ID','Age']]
-                # pha_order_.rename(columns={'Age rank':'Order'},inplace=True)
-                # df_ = pd.merge(df_,pha_order,on='Plant ID',how='left')#
             else:
                 pha_order_ = pd.read_csv(Turnover_dir+isec+'_'+ifa+'_'+ireg+'_AgeRank_'+str(yr_beg-10)+'_'+str(yr_end-10)+'.csv')
                 pha_order_.drop(['Age'],axis=1,inplace=True)
-                # df_ = pd.merge(df_,pha_order,on='Plant ID',how='left')#
             
             pha_order = pd.concat([pha_order,pha_order_],axis=0)
             
@@ -126,8 +127,8 @@ def get_source(ieng_sc,ior_sc,
         pha_order.reset_index(drop=False,inplace=True)
         pha_order.rename(columns={'index':'Order'},inplace=True)
         pha_order.drop(['Random_age','Age'],axis=1,inplace=True)
-
-    df = pd.merge(df,pha_order,on='Plant ID',how='left')#
+    
+    df = pd.merge(df,pha_order,on='Plant ID',how='left')
                 
     np.random.seed(2)
     change = df.loc[pd.isnull(df['Order']),['Plant ID','Age']].copy(deep=True)
@@ -146,9 +147,7 @@ def get_source(ieng_sc,ior_sc,
             pha_order = df.loc[(df['Sector']==isec)&(df['Facility Type']==ifa),['Plant ID','Age','Order']]
             pha_order.rename(columns={'Order':'Age rank'})
             pha_order.to_csv(Turnover_dir+isec+'_'+ifa+'_'+ireg+'_AgeRank_'+str(yr_beg)+'_'+str(yr_end)+'.csv',index=None)
-    ########################################################################
-    
-    ########################################################################
+
     if ior_sc == 'Emis':
         if yr_beg == startyr:
             np.random.seed(2)
@@ -169,7 +168,7 @@ def get_source(ieng_sc,ior_sc,
                     pha_order_ = pd.read_csv(Turnover_dir+isec+'_'+ifa+'_'+ireg+'_EmisRank_'+str(yr_beg-10)+'_'+str(yr_end-10)+'.csv')
                     pha_order = pd.concat([pha_order,pha_order_],axis=0)
             
-            df = pd.merge(df.drop(['Order'],axis=1),pha_order.drop(['CO2 Emissions'],axis=1),on='Plant ID',how='left')#
+            df = pd.merge(df.drop(['Order'],axis=1),pha_order.drop(['CO2 Emissions'],axis=1),on='Plant ID',how='left')
                         
             np.random.seed(2)
             change = df.loc[pd.isnull(df['Order']),['Plant ID','CO2 Emissions']].copy(deep=True)
@@ -188,10 +187,7 @@ def get_source(ieng_sc,ior_sc,
                 pha_order = df.loc[(df['Sector']==isec)&(df['Facility Type']==ifa),['Plant ID','CO2 Emissions','Order']]
                 
                 pha_order.to_csv(Turnover_dir+isec+'_'+ifa+'_'+ireg+'_EmisRank_'+str(yr_beg)+'_'+str(yr_end)+'.csv',index=None)
-    ########################################################################
-    
-    ################
-    #############################
+
     if ior_sc in ['Age','Emis']:
         if yr_beg == startyr:
             df = df.sort_values(['Order'],ascending=False).reset_index(drop=True)
@@ -200,13 +196,12 @@ def get_source(ieng_sc,ior_sc,
             df.drop(['CumComit'],axis=1,inplace=True)
             
         else:
-            #
             r_par_all = pd.read_csv(SSM_dir+'/capture_sec_'+ireg+'_marker.csv')
             r_par_all = r_par_all.loc[(r_par_all['Year']==yr_beg)&(r_par_all['CCUSInstall']==0),:]
             
             df = df.sort_values(['Order'],ascending=False).reset_index(drop=True)
             df['CumComit'] = df['Commitment (Mt)'].cumsum()
-            df = df.loc[(df['CumComit']<=constrain*2)|(np.isin(df['Plant ID'],r_par_all['Plant ID'])),:].reset_index(drop=True)
+            df = df.loc[(df['CumComit']<=constrain*1.5)|(np.isin(df['Plant ID'],r_par_all['Plant ID'])),:].reset_index(drop=True)
             df.drop(['CumComit'],axis=1,inplace=True)
             
     df.drop(['Order'],axis=1,inplace=True)
@@ -214,7 +209,6 @@ def get_source(ieng_sc,ior_sc,
         
     return df,constrain
 
-#
 def get_constrain(ieng_sc,isec,ifa,ireg,yr_end,comit):
     ccs_dem_coun = pd.read_csv('../../2_GetPPHarmonized/output/3_HarmonizedTrend/'+ieng_sc+'/'+isec+'_'+ifa+'_CCS_RegionTrend.csv')
     dem_coun = pd.read_csv('../../2_GetPPHarmonized/output/3_HarmonizedTrend/'+ieng_sc+'/'+isec+'_'+ifa+'_RegionTrend.csv')
@@ -227,7 +221,6 @@ def get_constrain(ieng_sc,isec,ifa,ireg,yr_end,comit):
     
     return constrain
 
-#
 def get_edge(so_data,si_data,SSM_dir,ireg,yr_beg,yr_end):
     print('Edge in')
     reg_list = [
@@ -260,7 +253,6 @@ def get_edge(so_data,si_data,SSM_dir,ireg,yr_beg,yr_end):
     all_loc = pd.concat([so_data.loc[:,['Plant ID','Longitude','Latitude']],
                           si_data.loc[:,['Plant ID','Longitude','Latitude']]],axis=0)
     
-    #
     pipline_net = pd.read_pickle('../../4_SSM/PreNet/PreNet_'+reg2+'/output/4_Network/Point2Point_'+reg1+'.pkl')
     pipline_net['Distances (km)'] = pipline_net['Distances (km)'].astype(float)
     pipline_net = pipline_net.loc[pipline_net['Distances (km)']<=max_distance,:]
@@ -286,24 +278,20 @@ def get_edge(so_data,si_data,SSM_dir,ireg,yr_beg,yr_end):
     all_dis.columns = ['Start','Lon_st','Lat_st','End','Lon_en','Lat_en']
     all_dis = all_dis.loc[all_dis['Start']!=all_dis['End'],:].reset_index(drop=True)
     
-
     all_dis2 = pd.merge(all_dis,pipline_net,on=['Start','End'],how='left')
     
     del pipline_net,all_dis,begin,end
     
     all_dis2['Distance'] = all_dis2['Distances (km)']
     all_dis2 = all_dis2.drop(['Distances (km)'],axis=1)
-    # all_dis2 = all_dis2.loc[all_dis2['Distance']>0,:]
     all_dis2 = all_dis2.loc[pd.isnull(all_dis2['Distance'])==0,:]
     all_dis2 = all_dis2.reset_index(drop=True)
     
     return all_dis2,all_loc
 
-#
 def FakePoint_Renet(net,df,yr_beg,yr_end):
     net_ori = net.copy(deep=True)
     
-    #
     filtered = df['Plant ID'].str.contains('0_20')
     df = df.loc[filtered,:].copy(deep=True)
     
@@ -317,26 +305,20 @@ def FakePoint_Renet(net,df,yr_beg,yr_end):
     df_add = pd.concat([df_add,df_add1],axis=0)
     del df_add1
     
-    #
-    ###################
     net_add_st = net_ori.loc[(np.isin(net_ori['Start'],df['Location_Plant ID'])),:].copy(deep=True)
     net_add_st = pd.merge(df.loc[:,['Location_Plant ID','Plant ID']],
                           net_add_st.rename(columns={'Start':'Location_Plant ID'}),
                           on='Location_Plant ID')
     net_add_st.drop(['Location_Plant ID'],axis=1,inplace=True)
     net_add_st.rename(columns={'Plant ID':'Start'},inplace=True)
-    ###################
-    
-    ###################
+
     net_add_en = net_ori.loc[(np.isin(net_ori['End'],df['Location_Plant ID'])),:].copy(deep=True)
     net_add_en = pd.merge(df.loc[:,['Location_Plant ID','Plant ID']],
                           net_add_en.rename(columns={'End':'Location_Plant ID'}),
                           on='Location_Plant ID')
     net_add_en.drop(['Location_Plant ID'],axis=1,inplace=True)
     net_add_en.rename(columns={'Plant ID':'End'},inplace=True)
-    ###################
-    
-    ################
+
     net_add_bo = net_ori.loc[(np.isin(net_ori['Start'],df['Location_Plant ID']))&\
                              (np.isin(net_ori['End'],df['Location_Plant ID'])),:].copy(deep=True)
     net_add_bo = pd.merge(df.loc[:,['Location_Plant ID','Plant ID']],
@@ -350,7 +332,6 @@ def FakePoint_Renet(net,df,yr_beg,yr_end):
                           on='Location_Plant ID')
     net_add_bo.drop(['Location_Plant ID'],axis=1,inplace=True)
     net_add_bo.rename(columns={'Plant ID':'End'},inplace=True)
-    ################
     
     net_ori = pd.concat([net_ori,net_add_st,net_add_en,net_add_bo],axis=0)
     net_ori.reset_index(drop=True,inplace=True)
@@ -364,10 +345,8 @@ def SSM_drive(so_data,si_data,
     
     a = time.time()
     
-    # Create a Gurobi model
     m = Model()
     
-    ####################################marker##########################
     if yr_beg == startyr:
         r_par = pd.DataFrame(data=1,index=so_data.index,columns=['CCUSInstall'])
         
@@ -383,7 +362,6 @@ def SSM_drive(so_data,si_data,
         r_par_all = pd.read_csv(SSM_dir+'/capture_sec_'+ireg+'_marker.csv')
         i_par_all = pd.read_csv(SSM_dir+'/store_sec_'+ireg+'_marker.csv')
         
-        #############################
         r_par = pd.DataFrame(data=1,index=so_data.index,columns=['CCUSInstall'])
         filtered_id = r_par_all.loc[r_par_all['CCUSInstall']==0,'Plant ID']
         r_par.loc[np.isin(so_data['Plant ID'],filtered_id),'CCUSInstall'] = 0
@@ -407,18 +385,14 @@ def SSM_drive(so_data,si_data,
         filtered_id = edge_id_all[edge_distance_all['PiplineInstall4']==0]
         edge_distance.loc[np.isin(edge_id_this,filtered_id),'PiplineInstall4'] = 0
         
-        #
         i_par = pd.DataFrame(data=1,index=si_data.index,columns=['StorageConstruct'])
         filtered_id = i_par_all.loc[i_par_all['StorageConstruct']==0,'Plant ID']
         i_par.loc[np.isin(si_data['Plant ID'],filtered_id),'StorageConstruct'] = 0
         
         del edge_distance_all,r_par_all,i_par_all
-    ##############################################################
-    
-    ##############################################
+
     cos_ret = pd.read_csv('../../2_GetPPHarmonized/output/PlantCaptureCost.csv')
     cos_ret = pd.merge(so_data.loc[:,['Plant ID','Sector','Facility Type']],cos_ret,on='Plant ID',how='left')
-    # cos_ret = cos_ret['CaptureCost']
     
     cost_dict = pd.read_excel('../../2_GetPPHarmonized/input/Dict_cost/Dict_RetrofitCost.xlsx',sheet_name='Final')
     pha_dict = pd.read_excel('../input/dict/DictOfPhaseout.xlsx',sheet_name='Max_Load_Life')
@@ -429,43 +403,70 @@ def SSM_drive(so_data,si_data,
             
             if isec == 'Power':
                 unit_cost = cost_dict.loc[cost_dict['Facility Type']==ifa,'UnitCaptureCost'].values[0]
-                cos_ret.loc[(pd.isnull(cos_ret['CaptureCost']))&(cos_ret['Facility Type']==ifa),'CaptureCost'] = unit_cap/8760*2*unit_cost
+                RefCapacity = cost_dict.loc[cost_dict['Facility Type']==ifa,'RefCap'].values[0]
+                Factor = cost_dict.loc[cost_dict['Facility Type']==ifa,'Factor'].values[0]
+
+                cos_ret.loc[(pd.isnull(cos_ret['CaptureCost']))&(cos_ret['Facility Type']==ifa),'CaptureCost'] = \
+                    unit_cap/8760*2*unit_cost*(unit_cap*2/RefCapacity)**Factor
+                
             elif isec == 'IronAndSteel':
                 unit_cost = cost_dict.loc[cost_dict['Facility Type']=='BF','UnitCaptureCost'].values[0]
-                cos_ret.loc[(pd.isnull(cos_ret['CaptureCost']))&(cos_ret['Facility Type']==ifa),'CaptureCost'] = unit_cap*2*unit_cost
+                RefCapacity = cost_dict.loc[cost_dict['Facility Type']=='BF','RefCap'].values[0]
+                Factor = cost_dict.loc[cost_dict['Facility Type']=='BF','Factor'].values[0]
+
+                cos_ret.loc[(pd.isnull(cos_ret['CaptureCost']))&(cos_ret['Facility Type']==ifa),'CaptureCost'] = \
+                    unit_cap*2*unit_cost*(unit_cap*2/RefCapacity)**Factor
+                
             elif isec == 'Cement':
                 unit_cost = cost_dict.loc[cost_dict['Facility Type']=='Dry with preheater and precalciner','UnitCaptureCost'].values[0]
-                cos_ret.loc[(pd.isnull(cos_ret['CaptureCost']))&(cos_ret['Facility Type']==ifa),'CaptureCost'] = unit_cap*2*unit_cost
+                RefCapacity = cost_dict.loc[cost_dict['Facility Type']=='Dry with preheater and precalciner','RefCap'].values[0]
+                Factor = cost_dict.loc[cost_dict['Facility Type']=='Dry with preheater and precalciner','Factor'].values[0]
+
+                cos_ret.loc[(pd.isnull(cos_ret['CaptureCost']))&(cos_ret['Facility Type']==ifa),'CaptureCost'] = \
+                    unit_cap*2*unit_cost*(unit_cap*2/RefCapacity)**Factor
     
     cos_ret = cos_ret['CaptureCost']
     
     del cost_dict,unit_cost,pha_dict
 
     s_var = m.addVars(so_data.shape[0], vtype=GRB.BINARY, name='s_var')
-    
-    changing_rate = pd.read_excel('../input/dict/Dict_Capture.xlsx',sheet_name='ComitPrediction',usecols=['Year','Comitted capture (Mt)'])
-    changing_rate_power = (changing_rate.loc[changing_rate['Year']==yr_end,'Comitted capture (Mt)'].values/changing_rate.loc[changing_rate['Year']==2021,'Comitted capture (Mt)'].values)[0]**np.log2((1-0.089))
-    changing_rate_other = (changing_rate.loc[changing_rate['Year']==yr_end,'Comitted capture (Mt)'].values/changing_rate.loc[changing_rate['Year']==2021,'Comitted capture (Mt)'].values)[0]**np.log2((1-0.05))
-    
-    cos_ret[so_data['Sector']=='Power'] = cos_ret[so_data['Sector']=='Power']*changing_rate_power
-    cos_ret[so_data['Sector']!='Power'] = cos_ret[so_data['Sector']!='Power']*changing_rate_other
-    
-    #
-    Potential_rot = (cos_ret*r_par['CCUSInstall'].values)
-    
-    del changing_rate_power,changing_rate_other
+    for i in range(so_data.shape[0]):
+        s_var[i].start = 0
+    del i
 
-    changing_rate_cap = (changing_rate.loc[changing_rate['Year']==yr_end,'Comitted capture (Mt)'].values/changing_rate.loc[changing_rate['Year']==2021,'Comitted capture (Mt)'].values)[0]**np.log2((1-0.125))
-    cos_cap2 = cos_cap*changing_rate_cap
+    Potential_rot = (cos_ret*r_par['CCUSInstall'].values)
+
+    cos_cap2 = cos_cap
     Potential_cap = cos_cap2*so_data['Commitment (Mt)'].values*0.9#(cos_cap-ben_cp)
-    
-    del changing_rate_cap
-    
+
+    pool_data = so_data.loc[:,['Pool_ID','WaterResou','WaterOrigi']].drop_duplicates()
+    for ipool in pool_data['Pool_ID']:
+        wr = pool_data.loc[pool_data['Pool_ID']==ipool,'WaterResou'].values[0]
+        wod = pool_data.loc[pool_data['Pool_ID']==ipool,'WaterOrigi'].values[0]
+
+        if wod/wr<=0.8:
+            constr_expr = quicksum(
+                s_var[i] * waterconsum * so_data.loc[i, 'CO2 Emissions'] * 0.9/10**6
+                for i in range(so_data.shape[0])
+                if so_data.loc[i, 'Pool_ID'] == ipool
+            )
+
+            m.addConstr((constr_expr + wod) / wr <= 0.8, name=f'WaterLimit_{ipool}')
+
+        else:
+            constr_expr = quicksum(
+                s_var[i]
+                for i in range(so_data.shape[0])
+                if so_data.loc[i, 'Pool_ID'] == ipool
+            )
+
+            m.addConstr(constr_expr == 0, name=f'WaterLimit_{ipool}')
+
+    del pool_data,wr,wod,constr_expr
 
     filter1 = np.isin(so_data['Plant ID'],all_loc['Plant ID'])
     m.addConstr(sum(s_var.select(np.where(~filter1)[0]))==0,name='So_Zero')
     del filter1
-
     if yr_beg != startyr:
         filter1 = (r_par['CCUSInstall']==0)
         for iloc in np.where(filter1)[0]:
@@ -475,29 +476,29 @@ def SSM_drive(so_data,si_data,
         except:
             pass
 
-
     #%%
     i_var = m.addVars(si_data.shape[0], vtype=GRB.BINARY, name='i_var')
     d_var = m.addVars(si_data.shape[0], lb=0, name='d_var')
-    
+    for i in range(si_data.shape[0]):
+        i_var[i].start = 0
+        d_var[i].start = 0
+    del i
+
     eor_par = pd.DataFrame(data=0,index=si_data.index,columns=['EOR'])
     eor_par.loc[(si_data['DSA']==0).values,'EOR'] = 1
-
-    changing_rate_storage = (changing_rate.loc[changing_rate['Year']==yr_end,'Comitted capture (Mt)'].values/changing_rate.loc[changing_rate['Year']==2021,'Comitted capture (Mt)'].values)[0]**np.log2((1-0.0715))
-    cos_site2 = cos_site*changing_rate_storage
+    
+    cos_site2 = cos_site
     
     Potential_site = cos_site2*i_par['StorageConstruct'].values
-
     oil_changing = pd.read_excel('../input/dict/Dict_OilPrice.xlsx',usecols=['Year','Oil price'])
     oil_changing = (oil_changing.loc[oil_changing['Year']==yr_end,'Oil price'].values/oil_changing.loc[oil_changing['Year']==2020,'Oil price'].values)[0]
     
-    cos_stor2 = cos_stor*changing_rate_storage
+    cos_stor2 = cos_stor
     ben_eor2 = ben_eor*oil_changing
     Potential_sto = cos_stor2-ben_eor2*eor_par['EOR'].values
     
     
-    del oil_changing,changing_rate_storage
-    
+    del oil_changing
     filter1 = np.isin(si_data['Plant ID'],all_loc['Plant ID'])
     m.addConstr(sum(i_var.select(np.where(~filter1)[0]))==0,name='Si_Zero')
     del filter1
@@ -510,18 +511,21 @@ def SSM_drive(so_data,si_data,
             del filter1,iloc
         except:
             pass
-        
     
     #%%
     b_var1 = m.addVars(edge_distance.shape[0], vtype=GRB.BINARY, name='b_var1')
     b_var2 = m.addVars(edge_distance.shape[0], vtype=GRB.BINARY, name='b_var2')
     b_var3 = m.addVars(edge_distance.shape[0], vtype=GRB.BINARY, name='b_var3')
     b_var4 = m.addVars(edge_distance.shape[0], vtype=GRB.BINARY, name='b_var4')
+    for i in range(edge_distance.shape[0]):
+        b_var1[i].start = 0
+        b_var2[i].start = 0
+        b_var3[i].start = 0
+        b_var4[i].start = 0
+    del i
     
-    changing_rate_trans = (changing_rate.loc[changing_rate['Year']==yr_end,'Comitted capture (Mt)'].values/changing_rate.loc[changing_rate['Year']==2021,'Comitted capture (Mt)'].values)[0]**np.log2((1-0.05))
-    
-    cos_pipe2 = [changing_rate_trans*i for i in cos_pipe]
-    cos_tran2 = [changing_rate_trans*i for i in cos_tran]
+    cos_pipe2 = cos_pipe
+    cos_tran2 = cos_tran
     
     Potential_pip1 = cos_pipe2[0]*edge_distance['PiplineInstall1'].values
     Potential_tran1 = cos_tran2[0]*edge_distance['Distance'].values
@@ -531,8 +535,6 @@ def SSM_drive(so_data,si_data,
     Potential_tran3 = cos_tran2[2]*edge_distance['Distance'].values
     Potential_pip4 = cos_pipe2[3]*edge_distance['PiplineInstall4'].values*edge_distance['Distance'].values
     Potential_tran4 = cos_tran2[3]*edge_distance['Distance'].values
-    
-    del changing_rate_trans
     
     #%%
     t_var = m.addVars(edge_distance.shape[0], lb=0, name='t_var')
@@ -546,8 +548,10 @@ def SSM_drive(so_data,si_data,
         
         filter1 = (t_para2['Start']!=all_loc.loc[i,'Plant ID'])&(t_para2['End']!=all_loc.loc[i,'Plant ID'])
         t_para2.loc[filter1,all_loc.loc[i,'Plant ID']] = 0
+        
         filter2 = (t_para2['Start']!=all_loc.loc[i,'Plant ID'])&(t_para2['End']==all_loc.loc[i,'Plant ID'])
         t_para2.loc[filter2,all_loc.loc[i,'Plant ID']] = 1
+        
         filter3 = (t_para2['Start']==all_loc.loc[i,'Plant ID'])&(t_para2['End']!=all_loc.loc[i,'Plant ID'])
         t_para2.loc[filter3,all_loc.loc[i,'Plant ID']] = -1
         
@@ -572,7 +576,6 @@ def SSM_drive(so_data,si_data,
         
     del filter1,filter2,filter3,loc,t_para2,t_para
     
-    
     #%%
     m.addConstr((so_data['Commitment (Mt)'].values*0.9).T@list(s_var.values())>=constrain,name='E1')
     m.addConstr((so_data['Commitment (Mt)'].values*0.9).T@list(s_var.values())<=constrain*1.01,name='E2')
@@ -584,15 +587,35 @@ def SSM_drive(so_data,si_data,
     t_var2 = m.addVars(edge_distance.shape[0], lb=0, name='t_var2')
     t_var3 = m.addVars(edge_distance.shape[0], lb=0, name='t_var3')
     t_var4 = m.addVars(edge_distance.shape[0], lb=0, name='t_var4')
-    
+    for i in range(edge_distance.shape[0]):
+        t_var1[i].start = 0
+        t_var2[i].start = 0
+        t_var3[i].start = 0
+        t_var4[i].start = 0
+    del i
+
     m.addConstrs((t_var1[i]<=b_var1[i]*pipline_cap[0] for i in range(edge_distance.shape[0])),name='P1')
     m.addConstrs((t_var2[i]<=b_var2[i]*pipline_cap[1] for i in range(edge_distance.shape[0])),name='P2')
     m.addConstrs((t_var3[i]<=b_var3[i]*pipline_cap[2] for i in range(edge_distance.shape[0])),name='P3')
     m.addConstrs((t_var4[i]<=b_var4[i]*pipline_cap[3] for i in range(edge_distance.shape[0])),name='P4')
     m.addConstrs((t_var1[i]+t_var2[i]+t_var3[i]+t_var4[i]==t_var[i] for i in range(edge_distance.shape[0])),name='P5')
     m.addConstrs((b_var1[i]+b_var2[i]+b_var3[i]+b_var4[i]<=1 for i in range(edge_distance.shape[0])),name='P6')
-
     
+    iloc_ls = []
+    for i in range(edge_distance.shape[0]):
+        if i in iloc_ls:
+            continue
+
+        iloc = np.where((edge_distance['Start']==edge_distance.loc[i,'End'])&(edge_distance['End']==edge_distance.loc[i,'Start']))[0]
+        if len(iloc)==0:
+            m.addConstr((b_var1[i]+b_var2[i]+b_var3[i]+b_var4[i]<=1),name='P6'+str(i))
+        
+        elif len(iloc)>0:
+            iloc_ls.append(iloc[0])
+            m.addConstr((b_var1[i]+b_var2[i]+b_var3[i]+b_var4[i]+b_var1[iloc[0]]+b_var2[iloc[0]]+b_var3[iloc[0]]+b_var4[iloc[0]]<=1),name='P6'+str(i))
+        
+    del iloc_ls,iloc,i
+
     if yr_beg != startyr:
         filter1 = (edge_distance['PiplineInstall1']==0)
         for iloc in np.where(filter1)[0]:
@@ -625,10 +648,9 @@ def SSM_drive(so_data,si_data,
             del filter1,iloc
         except:
             pass
-        
     
     #%%
-    m.setParam('MIPGap',0.01)
+    m.setParam('MIPGap',0.05)
     m.setParam('IntegralityFocus',1)
     m.setParam('verbose',True)
     m.setParam('ModelSense', 0)
@@ -639,7 +661,7 @@ def SSM_drive(so_data,si_data,
 
     m.setObjective(0,sense=GRB.MINIMIZE)
     m.optimize()
-    
+
     m.setObjective(((Potential_rot+Potential_cap)/10**8 @ list(s_var.values()))+\
                     (Potential_site/10**8 @ list(i_var.values())+Potential_sto/10**8 @ list(d_var.values()))+\
                     (Potential_tran1/10**8 @ list(t_var1.values())+Potential_tran2/10**8 @ list(t_var2.values())+\
@@ -647,13 +669,9 @@ def SSM_drive(so_data,si_data,
                      Potential_pip1/10**8 @ list(b_var1.values())+Potential_pip2/10**8 @ list(b_var2.values())+\
                      Potential_pip3/10**8 @ list(b_var3.values())+Potential_pip4/10**8 @ list(b_var4.values())),sense=GRB.MINIMIZE)
     m.optimize()
-
-    b = time.time()
     
-    # #保存源数据
     cap_data = so_data.copy(deep=True)
     cap_data.insert(loc=cap_data.shape[1],value=m.getAttr('x', s_var).select('*', '*'),column='Capature Marker')
-    # cap_data.insert(loc=cap_data.shape[1],value=yr_end,column='Year')
     cap_data['CO2 Capature (Mt)'] = cap_data['Capature Marker']*cap_data['Commitment (Mt)']*0.9
     cap_data['Capature Cost (USD)'] = (Potential_rot+Potential_cap) * cap_data['Capature Marker']
     cap_data.to_csv(SSM_dir+'/capture_'+ireg+'_'+str(yr_beg)+'_'+str(yr_end)+'.csv',index=None)
@@ -700,7 +718,7 @@ def SSM_main(ieng_sc,iend_sc,ior_sc,ireg,
                                    so_si=so_si,
                                    NewFuelEmis_dir=NewFuelEmis_dir,Turnover_dir=Turnover_dir,SSM_dir=SSM_dir,
                                    ireg=ireg,yr_beg=yr_beg,yr_end=yr_end)
-
+    
     edge_distance,all_loc = get_edge(so_data=so_data,si_data=si_data,SSM_dir=SSM_dir,
                                      ireg=ireg,yr_beg=yr_beg,yr_end=yr_end)
     
@@ -715,15 +733,15 @@ def SSM_main(ieng_sc,iend_sc,ior_sc,ireg,
 if __name__ == "__main__":
     ieng_sc='Neut'
     iend_sc='BAU'
-    ior_sc='Cost'
+    ior_sc='Age'
     ireg='India'
     NewFuelEmis_dir = OUTPUT_PATH+'/'+ieng_sc+'/'+iend_sc+'/'+ior_sc+'/3_NewFuelEmis/'
     SSM_dir = OUTPUT_PATH+'/'+ieng_sc+'/'+iend_sc+'/'+ior_sc+'/4_SSM/'
     Turnover_dir=OUTPUT_PATH+'/'+ieng_sc+'/'+iend_sc+'/'+ior_sc+'/0_Turnover/'
     
     mkdir(SSM_dir)
-    yr_beg=2040
-    yr_end=2050
+    yr_beg=2020
+    yr_end=2030
     
     SSM_main(ieng_sc,iend_sc,ior_sc,ireg,
              NewFuelEmis_dir,SSM_dir,Turnover_dir,
